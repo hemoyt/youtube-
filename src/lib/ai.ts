@@ -50,21 +50,65 @@ export async function fetchTranscriptMeta(videoId: string): Promise<TranscriptRe
 }
 
 // ─── Client-side transcript fetching ──────────────────────────────────
-// YouTube blocks serverless IPs from downloading transcript XML, but
-// allows real browser IPs. So we do the actual download in the browser.
+// YouTube's timedtext API blocks cross-origin requests (CORS) and
+// blocks serverless IPs. Strategy:
+//   1. Try direct fetch (works from some browsers/extensions)
+//   2. Fall back to CORS proxy (works everywhere)
 
-/** Fetch and parse a single transcript track from the user's browser. */
+const CORS_PROXIES = [
+  (url: string) => `https://corsproxy.io/?${encodeURIComponent(url)}`,
+  (url: string) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+];
+
+/** Fetch and parse a single transcript track from the browser. */
 export async function fetchTranscriptContent(
   track: TranscriptTrack
 ): Promise<TranscriptSegment[]> {
-  // Fetch the XML from YouTube — works from a real browser IP
-  const res = await fetch(track.transcriptUrl);
-  if (!res.ok) {
-    throw new Error(`Failed to fetch transcript: HTTP ${res.status}`);
+  let lastError: Error | null = null;
+
+  // Try direct fetch first
+  try {
+    const res = await fetch(track.transcriptUrl);
+    if (res.ok) {
+      const xml = await res.text();
+      if (xml && xml.trim().length > 0) {
+        return parseTranscriptXml(xml);
+      }
+    }
+  } catch (e) {
+    lastError = e as Error;
   }
 
-  const xml = await res.text();
-  return parseTranscriptXml(xml);
+  // Try JSON format with direct fetch
+  try {
+    const res = await fetch(track.transcriptUrl + "&fmt=json3");
+    if (res.ok) {
+      const text = await res.text();
+      if (text && text.trim().length > 0) {
+        return parseTranscriptJson3(text);
+      }
+    }
+  } catch {
+    // continue to proxy
+  }
+
+  // Fall back through CORS proxies
+  for (const makeProxyUrl of CORS_PROXIES) {
+    try {
+      const proxyUrl = makeProxyUrl(track.transcriptUrl);
+      const res = await fetch(proxyUrl);
+      if (res.ok) {
+        const xml = await res.text();
+        if (xml && xml.trim().length > 0) {
+          return parseTranscriptXml(xml);
+        }
+      }
+    } catch {
+      // try next proxy
+    }
+  }
+
+  throw lastError || new Error("All transcript fetch methods failed");
 }
 
 /** Fetch transcript content for ALL tracks in parallel from the browser. */
@@ -106,6 +150,31 @@ function parseTranscriptXml(xml: string): TranscriptSegment[] {
     }
   }
 
+  return segments;
+}
+
+/** Parse YouTube's JSON3 transcript format (fmt=json3). */
+function parseTranscriptJson3(json: string): TranscriptSegment[] {
+  const segments: TranscriptSegment[] = [];
+  try {
+    const data = JSON.parse(json);
+    const events = data.events || [];
+    for (const event of events) {
+      const segs = event.segs || [];
+      for (const seg of segs) {
+        const text = (seg.utf8 || "").replace(/\n/g, " ").trim();
+        if (text) {
+          segments.push({
+            text,
+            start: (seg.tStartMs || 0) / 1000,
+            duration: ((seg.dDurationMs || seg.tStartMs || 0) - (seg.tStartMs || 0)) / 1000 || 2,
+          });
+        }
+      }
+    }
+  } catch {
+    // Return whatever we parsed
+  }
   return segments;
 }
 
