@@ -14,8 +14,24 @@ export interface TranscriptSegment {
   duration: number;
 }
 
-// Fetch transcript via our API endpoint
-export async function fetchTranscript(videoId: string): Promise<TranscriptSegment[]> {
+export interface TranscriptTrack {
+  languageCode: string;
+  languageName: string;
+  kind: string; // "asr" = auto-generated, "standard" = manual
+  isTranslatable: boolean;
+  segments: TranscriptSegment[];
+  formattedText: string;
+  segmentCount: number;
+}
+
+export interface TranscriptResult {
+  tracks: TranscriptTrack[];
+  source: string;
+  totalTracks: number;
+}
+
+// Fetch ALL transcripts for a video (multiple languages)
+export async function fetchTranscript(videoId: string): Promise<TranscriptResult> {
   const res = await fetch(`${API_BASE}/transcript`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -25,8 +41,31 @@ export async function fetchTranscript(videoId: string): Promise<TranscriptSegmen
     const err = await res.json().catch(() => ({ error: "Failed to fetch transcript" }));
     throw new Error(err.error || "Failed to fetch transcript");
   }
+  return res.json();
+}
+
+// Get formatted transcript text for AI context (first available track)
+export function getTranscriptText(result: TranscriptResult): string {
+  if (result.tracks.length === 0) return "";
+  return result.tracks[0].formattedText;
+}
+
+// Translate transcript to another language via AI
+export async function translateTranscript(
+  segments: TranscriptSegment[],
+  targetLanguage: string
+): Promise<string> {
+  const res = await fetch(`${API_BASE}/translate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ segments, targetLanguage }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: "Translation failed" }));
+    throw new Error(err.error || "Translation failed");
+  }
   const data = await res.json();
-  return data.segments;
+  return data.translatedText;
 }
 
 // Chat with video

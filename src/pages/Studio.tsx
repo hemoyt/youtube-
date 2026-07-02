@@ -1,17 +1,39 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { Play, Sparkles, MessageCircle, Download, Scissors, Loader2, Send, FileText, List, CheckCircle, Clock } from "lucide-react";
+import { Play, Sparkles, MessageCircle, Download, Scissors, Loader2, Send, FileText, List, CheckCircle, Clock, Globe, Languages } from "lucide-react";
 import { extractVideoId, getEmbedUrl, getThumbnail, fetchVideoInfo, type VideoInfo } from "@/lib/youtube";
-import { fetchTranscript, chatWithVideo, generateSummary, generateViralShorts, getDownloadInfo, type ChatMessage, type TranscriptSegment, type ViralShort, type DownloadInfo } from "@/lib/ai";
+import { fetchTranscript, translateTranscript, chatWithVideo, generateSummary, generateViralShorts, getDownloadInfo, getTranscriptText, type ChatMessage, type TranscriptSegment, type TranscriptResult, type TranscriptTrack, type ViralShort, type DownloadInfo } from "@/lib/ai";
 
-type Tab = "watch" | "chat" | "summary" | "viral" | "download";
+type Tab = "watch" | "transcript" | "chat" | "summary" | "viral" | "download";
+
+const SUPPORTED_LANGUAGES = [
+  "Arabic",
+  "Chinese (Simplified)",
+  "Chinese (Traditional)",
+  "Dutch",
+  "English",
+  "French",
+  "German",
+  "Hindi",
+  "Indonesian",
+  "Italian",
+  "Japanese",
+  "Korean",
+  "Malay",
+  "Portuguese",
+  "Russian",
+  "Spanish",
+  "Thai",
+  "Turkish",
+  "Vietnamese",
+];
 
 export default function Studio() {
   const [url, setUrl] = useState("");
   const [videoId, setVideoId] = useState<string | null>(null);
   const [videoInfo, setVideoInfo] = useState<VideoInfo | null>(null);
-  const [transcript, setTranscript] = useState<TranscriptSegment[]>([]);
-  const [transcriptText, setTranscriptText] = useState("");
+  const [transcriptResult, setTranscriptResult] = useState<TranscriptResult | null>(null);
+  const [selectedTrackIndex, setSelectedTrackIndex] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [activeTab, setActiveTab] = useState<Tab>("watch");
@@ -34,6 +56,14 @@ export default function Studio() {
   const [downloadInfo, setDownloadInfo] = useState<DownloadInfo | null>(null);
   const [downloadLoading, setDownloadLoading] = useState(false);
 
+  // Translation state
+  const [targetLanguage, setTargetLanguage] = useState("English");
+  const [translatedText, setTranslatedText] = useState("");
+  const [translating, setTranslating] = useState(false);
+
+  const selectedTrack: TranscriptTrack | null =
+    transcriptResult?.tracks?.[selectedTrackIndex] ?? null;
+
   async function handleLoad() {
     setError("");
     const id = extractVideoId(url);
@@ -44,8 +74,9 @@ export default function Studio() {
 
     setLoading(true);
     setVideoId(id);
-    setTranscript([]);
-    setTranscriptText("");
+    setTranscriptResult(null);
+    setSelectedTrackIndex(0);
+    setTranslatedText("");
     setChatMessages([]);
     setSummary("");
     setShorts([]);
@@ -53,16 +84,14 @@ export default function Studio() {
     setActiveTab("watch");
 
     try {
-      // Fetch video info and transcript in parallel
       const [info, transcriptData] = await Promise.all([
         fetchVideoInfo(id),
         fetchTranscript(id),
       ]);
       setVideoInfo(info);
-      setTranscript(transcriptData);
-      setTranscriptText(formatTranscriptForAI(transcriptData));
+      setTranscriptResult(transcriptData);
     } catch (err: any) {
-      if (err.message?.includes("caption") || err.message?.includes("transcript")) {
+      if (err.message?.includes("caption") || err.message?.includes("transcript") || err.message?.includes("Could not fetch")) {
         setError("This video has no captions available. Try another video.");
       } else {
         setError(err.message || "Something went wrong");
@@ -72,8 +101,22 @@ export default function Studio() {
     }
   }
 
+  async function handleTranslate() {
+    if (!selectedTrack || translating) return;
+    setTranslating(true);
+    setTranslatedText("");
+    try {
+      const result = await translateTranscript(selectedTrack.segments, targetLanguage);
+      setTranslatedText(result);
+    } catch (err: any) {
+      setError(err.message || "Translation failed");
+    } finally {
+      setTranslating(false);
+    }
+  }
+
   async function handleChat() {
-    if (!chatInput.trim() || chatLoading) return;
+    if (!chatInput.trim() || chatLoading || !selectedTrack) return;
     const userMsg: ChatMessage = { role: "user", content: chatInput };
     const newMessages = [...chatMessages, userMsg];
     setChatMessages(newMessages);
@@ -81,7 +124,7 @@ export default function Studio() {
     setChatLoading(true);
 
     try {
-      const response = await chatWithVideo(videoId!, newMessages, transcriptText);
+      const response = await chatWithVideo(videoId!, newMessages, selectedTrack.formattedText);
       setChatMessages([...newMessages, { role: "assistant", content: response }]);
     } catch (err: any) {
       setChatMessages([...newMessages, { role: "assistant", content: `Error: ${err.message}` }]);
@@ -91,11 +134,11 @@ export default function Studio() {
   }
 
   async function handleSummary() {
-    if (summaryLoading) return;
+    if (summaryLoading || !selectedTrack) return;
     setSummaryLoading(true);
     setSummary("");
     try {
-      const result = await generateSummary(videoId!, transcriptText, summaryType);
+      const result = await generateSummary(videoId!, selectedTrack.formattedText, summaryType);
       setSummary(result);
     } catch (err: any) {
       setSummary(`Error: ${err.message}`);
@@ -105,11 +148,11 @@ export default function Studio() {
   }
 
   async function handleViral() {
-    if (viralLoading) return;
+    if (viralLoading || !selectedTrack) return;
     setViralLoading(true);
     setShorts([]);
     try {
-      const result = await generateViralShorts(videoId!, transcriptText);
+      const result = await generateViralShorts(videoId!, selectedTrack.formattedText);
       setShorts(result);
     } catch (err: any) {
       setError(err.message);
@@ -133,8 +176,9 @@ export default function Studio() {
 
   const tabs: { id: Tab; label: string; icon: any }[] = [
     { id: "watch", label: "Watch", icon: Play },
+    { id: "transcript", label: "Transcript", icon: FileText },
     { id: "chat", label: "Chat", icon: MessageCircle },
-    { id: "summary", label: "Summary", icon: FileText },
+    { id: "summary", label: "Summary", icon: List },
     { id: "viral", label: "Viral Shorts", icon: Scissors },
     { id: "download", label: "Download", icon: Download },
   ];
@@ -150,12 +194,14 @@ export default function Studio() {
             </div>
             <span className="font-semibold">YT Studio</span>
           </Link>
-          {transcript.length > 0 && (
-            <div className="badge bg-green-50 text-green-600">
-              <CheckCircle className="w-3 h-3" />
-              Transcript loaded ({transcript.length} segments)
-            </div>
-          )}
+          <div className="flex items-center gap-3">
+            {transcriptResult && (
+              <div className="badge bg-green-50 text-green-600">
+                <CheckCircle className="w-3 h-3" />
+                {transcriptResult.totalTracks} language{transcriptResult.totalTracks !== 1 ? "s" : ""}
+              </div>
+            )}
+          </div>
         </div>
       </header>
 
@@ -179,6 +225,31 @@ export default function Studio() {
           {error && <p className="mt-3 text-sm text-red-500">{error}</p>}
         </div>
 
+        {/* Language selector — show when transcript is loaded */}
+        {transcriptResult && transcriptResult.tracks.length > 1 && (
+          <div className="mb-4 flex items-center gap-2 flex-wrap">
+            <Globe className="w-4 h-4 text-ink-400" />
+            <span className="text-sm text-ink-500">Transcript language:</span>
+            {transcriptResult.tracks.map((track, i) => (
+              <button
+                key={i}
+                onClick={() => {
+                  setSelectedTrackIndex(i);
+                  setTranslatedText("");
+                }}
+                className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${
+                  i === selectedTrackIndex
+                    ? "bg-ink-900 text-white"
+                    : "bg-ink-100 text-ink-600 hover:bg-ink-200"
+                }`}
+              >
+                {track.languageName}
+                {track.kind === "asr" && " (auto)"}
+              </button>
+            ))}
+          </div>
+        )}
+
         {/* Video loaded */}
         {videoId && (
           <div className="animate-fade-in">
@@ -186,7 +257,14 @@ export default function Studio() {
             {videoInfo && (
               <div className="mb-4">
                 <h2 className="text-xl font-semibold">{videoInfo.title}</h2>
-                <p className="text-sm text-ink-500 mt-1">{videoInfo.author}</p>
+                <div className="flex items-center gap-3 mt-1">
+                  <p className="text-sm text-ink-500">{videoInfo.author}</p>
+                  {selectedTrack && (
+                    <span className="badge bg-blue-50 text-blue-600 text-xs">
+                      {selectedTrack.languageName} ({selectedTrack.segmentCount} segments)
+                    </span>
+                  )}
+                </div>
               </div>
             )}
 
@@ -215,7 +293,17 @@ export default function Studio() {
 
             {/* Tab content */}
             <div className="min-h-[400px]">
-              {activeTab === "watch" && <WatchTab videoId={videoId} videoInfo={videoInfo} />}
+              {activeTab === "watch" && <WatchTab videoId={videoId} videoInfo={videoInfo} selectedTrack={selectedTrack} />}
+              {activeTab === "transcript" && (
+                <TranscriptTab
+                  track={selectedTrack}
+                  translatedText={translatedText}
+                  targetLanguage={targetLanguage}
+                  setTargetLanguage={setTargetLanguage}
+                  onTranslate={handleTranslate}
+                  translating={translating}
+                />
+              )}
               {activeTab === "chat" && (
                 <ChatTab
                   messages={chatMessages}
@@ -223,7 +311,7 @@ export default function Studio() {
                   setInput={setChatInput}
                   onSend={handleChat}
                   loading={chatLoading}
-                  hasTranscript={transcript.length > 0}
+                  hasTranscript={!!selectedTrack}
                 />
               )}
               {activeTab === "summary" && (
@@ -259,26 +347,21 @@ export default function Studio() {
   );
 }
 
-function formatTranscriptForAI(segments: TranscriptSegment[]): string {
-  let result = "";
-  for (const s of segments) {
-    const ts = formatTime(s.start);
-    const line = `[${ts}] ${s.text}\n`;
-    if (result.length + line.length > 50000) break;
-    result += line;
-  }
-  return result;
-}
-
 function formatTime(seconds: number): string {
   const m = Math.floor(seconds / 60);
   const s = Math.floor(seconds % 60);
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
-// --- Tab Components ---
+function formatTimeShort(seconds: number): string {
+  const m = Math.floor(seconds / 60);
+  const s = Math.floor(seconds % 60);
+  return `${m}:${s.toString().padStart(2, "0")}`;
+}
 
-function WatchTab({ videoId, videoInfo }: { videoId: string; videoInfo: VideoInfo | null }) {
+// ─── Tab Components ──────────────────────────────────────────────────
+
+function WatchTab({ videoId, videoInfo, selectedTrack }: { videoId: string; videoInfo: VideoInfo | null; selectedTrack: TranscriptTrack | null }) {
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
       <div className="lg:col-span-2">
@@ -299,11 +382,135 @@ function WatchTab({ videoId, videoInfo }: { videoId: string; videoInfo: VideoInf
             <p className="text-xs text-ink-500 mt-1">{videoInfo.author}</p>
           </div>
         )}
-        <div className="card p-4">
-          <h3 className="text-sm font-semibold mb-2">Quick actions</h3>
-          <p className="text-sm text-ink-500">
-            Use the tabs above to chat with this video, get a summary, generate viral shorts, or download.
-          </p>
+        {selectedTrack && (
+          <div className="card p-4">
+            <h3 className="text-sm font-semibold mb-2 flex items-center gap-2">
+              <Globe className="w-4 h-4" />
+              Transcript Info
+            </h3>
+            <div className="space-y-2 text-sm text-ink-500">
+              <div className="flex justify-between">
+                <span>Language</span>
+                <span className="font-medium text-ink-700">{selectedTrack.languageName}</span>
+              </div>
+              <div className="flex justify-between">
+                <span>Type</span>
+                <span className="font-medium text-ink-700">
+                  {selectedTrack.kind === "asr" ? "Auto-generated" : selectedTrack.kind === "standard" ? "Manual" : selectedTrack.kind}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span>Segments</span>
+                <span className="font-medium text-ink-700">{selectedTrack.segmentCount}</span>
+              </div>
+              {selectedTrack.isTranslatable && (
+                <div className="flex justify-between">
+                  <span>Translatable</span>
+                  <span className="font-medium text-green-600">Yes</span>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function TranscriptTab({
+  track,
+  translatedText,
+  targetLanguage,
+  setTargetLanguage,
+  onTranslate,
+  translating,
+}: {
+  track: TranscriptTrack | null;
+  translatedText: string;
+  targetLanguage: string;
+  setTargetLanguage: (v: string) => void;
+  onTranslate: () => void;
+  translating: boolean;
+}) {
+  if (!track) {
+    return (
+      <div className="text-center py-20">
+        <FileText className="w-8 h-8 text-ink-300 mx-auto mb-3" />
+        <p className="text-ink-400 text-sm">No transcript available for this video.</p>
+      </div>
+    );
+  }
+
+  const displayText = translatedText || track.formattedText;
+
+  return (
+    <div>
+      {/* Language info + translate controls */}
+      <div className="card p-4 mb-6">
+        <div className="flex items-center gap-4 flex-wrap">
+          <div className="flex items-center gap-2">
+            <Globe className="w-4 h-4 text-ink-400" />
+            <span className="text-sm font-medium">
+              {track.languageName}
+              {track.kind === "asr" && (
+                <span className="text-ink-400 font-normal ml-1">(auto-generated)</span>
+              )}
+            </span>
+            <span className="text-xs text-ink-400">• {track.segmentCount} segments</span>
+          </div>
+
+          <div className="flex items-center gap-2 ml-auto">
+            <span className="text-sm text-ink-400 flex items-center gap-1">
+              <Languages className="w-3.5 h-3.5" />
+              Translate to:
+            </span>
+            <select
+              value={targetLanguage}
+              onChange={(e) => {
+                setTargetLanguage(e.target.value);
+                setTargetLanguage(e.target.value);
+              }}
+              className="text-sm border border-ink-200 rounded-lg px-2 py-1.5 bg-white"
+            >
+              {SUPPORTED_LANGUAGES.map((lang) => (
+                <option key={lang} value={lang}>{lang}</option>
+              ))}
+            </select>
+            <button
+              onClick={onTranslate}
+              disabled={translating || targetLanguage === track.languageName}
+              className="btn-primary text-xs py-1.5 px-3"
+            >
+              {translating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : "Translate"}
+            </button>
+          </div>
+        </div>
+
+        {translatedText && (
+          <div className="mt-3 pt-3 border-t border-ink-100 flex items-center gap-2">
+            <span className="badge bg-green-50 text-green-600 text-xs">
+              Translated to {targetLanguage}
+            </span>
+            <button
+              onClick={() => {
+                setTargetLanguage("");
+                // Clear translated text
+                window.location.reload();
+              }}
+              className="text-xs text-ink-400 hover:text-ink-600"
+            >
+              Show original
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* Transcript text */}
+      <div className="card p-6">
+        <div className="max-h-[600px] overflow-y-auto">
+          <div className="whitespace-pre-wrap text-sm text-ink-700 leading-relaxed font-mono">
+            {displayText}
+          </div>
         </div>
       </div>
     </div>
@@ -518,12 +725,6 @@ function ViralTab({ shorts, loading, onRegenerate }: { shorts: ViralShort[]; loa
       </div>
     </div>
   );
-}
-
-function formatTimeShort(seconds: number): string {
-  const m = Math.floor(seconds / 60);
-  const s = Math.floor(seconds % 60);
-  return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
 function DownloadTab({ info, loading, videoId }: { info: DownloadInfo | null; loading: boolean; videoId: string }) {
