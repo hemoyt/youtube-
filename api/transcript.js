@@ -1,4 +1,4 @@
-import { setCors, parseBody, fetchAllTranscripts, formatTranscript } from "./_lib.js";
+import { setCors, parseBody, fetchAllTranscripts } from "./_lib.js";
 
 export default async function handler(req, res) {
   setCors(res);
@@ -11,23 +11,22 @@ export default async function handler(req, res) {
   if (!videoId) return res.status(400).json({ error: "videoId is required" });
 
   try {
+    // Returns track metadata with transcriptUrl for EACH track.
+    // The browser fetches the actual transcript XML from those URLs
+    // (YouTube blocks serverless IPs, but allows requests from real browsers).
     const result = await fetchAllTranscripts(videoId);
 
-    // Return ALL tracks with their metadata and formatted text
-    const tracks = result.tracks.map((t) => ({
-      languageCode: t.languageCode,
-      languageName: t.languageName,
-      kind: t.kind,
-      isTranslatable: t.isTranslatable,
-      segments: t.segments,
-      formattedText: formatTranscript(t.segments),
-      segmentCount: t.segments.length,
-    }));
-
     res.json({
-      tracks,
+      tracks: result.tracks.map((t) => ({
+        languageCode: t.languageCode,
+        languageName: t.languageName,
+        kind: t.kind,
+        isTranslatable: t.isTranslatable,
+        transcriptUrl: t.transcriptUrl,
+        translationLanguages: t.translationLanguages,
+      })),
       source: result.source,
-      totalTracks: tracks.length,
+      totalTracks: result.tracks.length,
     });
   } catch (err) {
     console.error("Transcript error:", err.message);
