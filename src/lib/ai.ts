@@ -50,13 +50,21 @@ export async function fetchTranscriptMeta(videoId: string): Promise<TranscriptRe
 }
 
 // ─── Client-side transcript fetching ──────────────────────────────────
-// YouTube's timedtext API blocks cross-origin requests (CORS) and
-// blocks serverless IPs. Strategy:
-//   1. Try direct fetch (works from some browsers/extensions)
-//   2. Fall back to CORS proxy (works everywhere)
+// YouTube's timedtext API blocks cross-origin (CORS) from browsers AND
+// blocks serverless IPs from servers. Strategy for dev + prod:
+//   Dev:  Vite proxies /yt-timedtext?<params> → YouTube (user's real IP)
+//   Prod: CORS proxy fallback
 
-const CORS_PROXIES = [
-  (url: string) => `https://corsproxy.io/?${encodeURIComponent(url)}`,
+/** Build a same-origin proxy URL for YouTube's timedtext API. */
+function makeProxyUrl(transcriptUrl: string): string {
+  // Extract the query string from the YouTube URL
+  const qIdx = transcriptUrl.indexOf("?");
+  if (qIdx < 0) return transcriptUrl;
+  const query = transcriptUrl.substring(qIdx); // includes "?"
+  return `/yt-timedtext${query}`;
+}
+
+const CORS_FALLBACKS = [
   (url: string) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
 ];
 
@@ -66,7 +74,21 @@ export async function fetchTranscriptContent(
 ): Promise<TranscriptSegment[]> {
   let lastError: Error | null = null;
 
-  // Try direct fetch first
+  // Try 1: Same-origin via Vite proxy (works in dev mode from user's IP)
+  try {
+    const proxyUrl = makeProxyUrl(track.transcriptUrl);
+    const res = await fetch(proxyUrl);
+    if (res.ok) {
+      const xml = await res.text();
+      if (xml && xml.trim().length > 0) {
+        return parseTranscriptXml(xml);
+      }
+    }
+  } catch {
+    // proxy not available (production) — continue
+  }
+
+  // Try 2: Direct fetch (works with some browser extensions)
   try {
     const res = await fetch(track.transcriptUrl);
     if (res.ok) {
@@ -79,7 +101,7 @@ export async function fetchTranscriptContent(
     lastError = e as Error;
   }
 
-  // Try JSON format with direct fetch
+  // Try 3: Direct with JSON3 format  
   try {
     const res = await fetch(track.transcriptUrl + "&fmt=json3");
     if (res.ok) {
@@ -89,14 +111,14 @@ export async function fetchTranscriptContent(
       }
     }
   } catch {
-    // continue to proxy
+    // continue
   }
 
-  // Fall back through CORS proxies
-  for (const makeProxyUrl of CORS_PROXIES) {
+  // Try 4: CORS proxy fallback
+  for (const makeUrl of CORS_FALLBACKS) {
     try {
-      const proxyUrl = makeProxyUrl(track.transcriptUrl);
-      const res = await fetch(proxyUrl);
+      const url = makeUrl(track.transcriptUrl);
+      const res = await fetch(url);
       if (res.ok) {
         const xml = await res.text();
         if (xml && xml.trim().length > 0) {
@@ -104,7 +126,7 @@ export async function fetchTranscriptContent(
         }
       }
     } catch {
-      // try next proxy
+      // try next
     }
   }
 
