@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState } from "react";
 import { Link } from "react-router-dom";
 import { Play, Sparkles, MessageCircle, Download, Scissors, Loader2, Send, FileText, List, CheckCircle, Clock, Globe, Languages } from "lucide-react";
 import { extractVideoId, getEmbedUrl, getThumbnail, fetchVideoInfo, type VideoInfo } from "@/lib/youtube";
@@ -66,6 +66,7 @@ export default function Studio() {
 
     setLoading(true);
     setVideoId(id);
+    setVideoInfo(null);
     setTranscriptMeta(null);
     setTrackSegments(new Map());
     setSelectedTrackIndex(0);
@@ -76,16 +77,31 @@ export default function Studio() {
     setDownloadInfo(null);
     setActiveTab("watch");
 
-    try {
-      // Step 1: Fetch video info + transcript metadata (URLs) from server
-      const [info, meta] = await Promise.all([
-        fetchVideoInfo(id),
-        fetchTranscriptMeta(id),
-      ]);
-      setVideoInfo(info);
-      setTranscriptMeta(meta);
+    // Video info (oEmbed) is a nice-to-have — fetch it independently so a
+    // hiccup there can't take down the transcript/chat/summary features.
+    const [infoResult, metaResult] = await Promise.allSettled([
+      fetchVideoInfo(id),
+      fetchTranscriptMeta(id),
+    ]);
 
-      // Step 2: Fetch actual transcript content from BROWSER (not server)
+    if (infoResult.status === "fulfilled") setVideoInfo(infoResult.value);
+
+    if (metaResult.status === "rejected") {
+      const err: any = metaResult.reason;
+      if (err.message?.includes("caption") || err.message?.includes("transcript") || err.message?.includes("no captions")) {
+        setError("This video has no captions available. Try another video.");
+      } else {
+        setError(err.message || "Something went wrong");
+      }
+      setLoading(false);
+      return;
+    }
+
+    const meta = metaResult.value;
+    setTranscriptMeta(meta);
+
+    try {
+      // Fetch actual transcript content from BROWSER (not server)
       setLoadingTranscript(true);
       const allSegments = await fetchAllTranscriptContent(meta.tracks);
       const newMap = new Map<number, TranscriptSegment[]>();
@@ -93,12 +109,6 @@ export default function Studio() {
         if (segs) newMap.set(i, segs);
       });
       setTrackSegments(newMap);
-    } catch (err: any) {
-      if (err.message?.includes("caption") || err.message?.includes("transcript") || err.message?.includes("no captions")) {
-        setError("This video has no captions available. Try another video.");
-      } else {
-        setError(err.message || "Something went wrong");
-      }
     } finally {
       setLoading(false);
       setLoadingTranscript(false);
@@ -333,7 +343,7 @@ export default function Studio() {
                 <ViralTab shorts={shorts} loading={viralLoading} onRegenerate={handleViral} />
               )}
               {activeTab === "download" && (
-                <DownloadTab info={downloadInfo} loading={downloadLoading} videoId={videoId} />
+                <DownloadTab info={downloadInfo} loading={downloadLoading} />
               )}
             </div>
           </div>
@@ -559,7 +569,7 @@ function ViralTab({ shorts, loading, onRegenerate }: { shorts: ViralShort[]; loa
   );
 }
 
-function DownloadTab({ info, loading, videoId }: { info: DownloadInfo | null; loading: boolean; videoId: string }) {
+function DownloadTab({ info, loading }: { info: DownloadInfo | null; loading: boolean }) {
   if (loading) return <div className="flex items-center gap-3 text-ink-400"><Loader2 className="w-5 h-5 animate-spin" /><span className="text-sm">Getting download options...</span></div>;
   if (!info) return null;
   return (

@@ -23,8 +23,10 @@ Paste a YouTube link. Watch, chat, summarize, and create viral shorts from any v
 1. Clone the repo
 2. `npm install`
 3. Copy `.env.example` to `.env` and add your OpenRouter API key
-4. `npm run dev` to start the dev server
+4. `npm run dev` — starts the Vite dev server (port 3000) and a local API server (port 3001) together
 5. Deploy to Vercel — set `OPENROUTER_API_KEY` in Vercel env vars
+
+`npm run dev` reads `.env` via `api-server.js` (a local stand-in for Vercel's serverless functions, used only in development). In production on Vercel, the files in `api/` run as real serverless functions instead.
 
 ## License
 

@@ -50,7 +50,7 @@ IMPORTANT: Return ONLY the JSON, no markdown, no explanation before or after.`;
       { role: "user", content: `Here is the video transcript with timestamps:\n\n${transcriptContext}` },
     ];
 
-    const response = await callAI(messages, "openai/gpt-5.2-mini");
+    const response = await callAI(messages);
 
     // Parse JSON from response (handle markdown code blocks)
     let cleaned = response.trim();
