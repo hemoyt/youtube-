@@ -1,5 +1,5 @@
 import { Link } from "react-router-dom";
-import { Play, Sparkles, MessageCircle, Download, Scissors } from "lucide-react";
+import { Play, Sparkles, MessageCircle, Scissors } from "lucide-react";
 
 export default function Landing() {
   return (

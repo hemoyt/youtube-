@@ -182,7 +182,7 @@ async function translateChunk(text, targetLanguage) {
       "X-Title": "YT Studio",
     },
     body: JSON.stringify({
-      model: "openai/gpt-5.2-mini",
+      model: "~openai/gpt-mini-latest",
       messages: [
         {
           role: "system",
@@ -202,7 +202,7 @@ async function translateChunk(text, targetLanguage) {
 
 // ─── AI Chat ───────────────────────────────────────────────────────────
 
-export async function callAI(messages, model = "openai/gpt-5.2-mini") {
+export async function callAI(messages, model = "~openai/gpt-mini-latest") {
   if (!_key) throw new Error("API key not configured");
 
   const res = await fetch(OPENROUTER_URL, {

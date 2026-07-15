@@ -34,14 +34,14 @@ export default async function handler(req, res) {
       options: [
         {
           label: "Video (MP4)",
-          desc: "Download video in best available quality",
-          url: `https://cobalt.tools/https://www.youtube.com/watch?v=${videoId}`,
+          desc: "Opens cobalt.tools in a new tab — paste the video link there to download",
+          url: "https://cobalt.tools/",
           type: "video",
         },
         {
           label: "Audio Only (MP3)",
-          desc: "Extract audio from video as MP3",
-          url: `https://cobalt.tools/https://www.youtube.com/watch?v=${videoId}`,
+          desc: "Opens cobalt.tools in a new tab — paste the link there and choose audio",
+          url: "https://cobalt.tools/",
           type: "audio",
         },
         {
