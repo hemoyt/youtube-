@@ -88,11 +88,7 @@ export default function Studio() {
 
     if (metaResult.status === "rejected") {
       const err: any = metaResult.reason;
-      if (err.message?.includes("caption") || err.message?.includes("transcript") || err.message?.includes("no captions")) {
-        setError("This video has no captions available. Try another video.");
-      } else {
-        setError(err.message || "Something went wrong");
-      }
+      setError(err.message || "Something went wrong");
       setLoading(false);
       return;
     }

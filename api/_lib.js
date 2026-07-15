@@ -45,55 +45,8 @@ function extractBalancedJson(text, startPos) {
   return null;
 }
 
-/**
- * Fetch the YouTube page and extract caption track metadata (URLs only).
- * The actual transcript download happens CLIENT-SIDE from the browser,
- * because YouTube blocks serverless IPs from accessing transcript content.
- */
-export async function fetchAllTranscripts(videoId) {
-  // Fetch YouTube watch page
-  const res = await fetch(`https://www.youtube.com/watch?v=${videoId}`, {
-    headers: {
-      "User-Agent": USER_AGENT,
-      "Accept-Language": "en-US,en;q=0.9,ar;q=0.8,zh;q=0.7,es;q=0.6,fr;q=0.5",
-    },
-  });
-
-  const html = await res.text();
-
-  // Extract captionTracks from the page
-  const captionIdx = html.indexOf('"captionTracks":');
-  if (captionIdx < 0) {
-    // No captionTracks in HTML — video truly has no captions
-    // Try oembed to see if we can at least get video info
-    throw new Error(
-      "This video has no captions or subtitles available. The creator has not enabled captions for this video."
-    );
-  }
-
-  const openBracket = html.indexOf("[", captionIdx);
-  if (openBracket < 0) {
-    throw new Error("Could not parse caption data from YouTube page.");
-  }
-
-  const balanced = extractBalancedJson(html, openBracket);
-  if (!balanced) {
-    throw new Error("Could not extract caption tracks from YouTube page.");
-  }
-
-  let tracksJson;
-  try {
-    tracksJson = JSON.parse(balanced);
-  } catch {
-    throw new Error("Could not parse caption track data.");
-  }
-
-  if (!Array.isArray(tracksJson) || tracksJson.length === 0) {
-    throw new Error("No caption tracks found for this video.");
-  }
-
-  // Return track metadata + URLs for client-side fetching
-  const tracks = tracksJson.map((t) => ({
+function mapCaptionTracks(tracksJson) {
+  return tracksJson.map((t) => ({
     languageCode: t.languageCode || "unknown",
     languageName:
       t.name?.simpleText || t.name?.runs?.[0]?.text || t.languageCode || "Unknown",
@@ -107,8 +60,63 @@ export async function fetchAllTranscripts(videoId) {
         tl.languageName?.simpleText || tl.languageCode || "Unknown",
     })),
   }));
+}
 
-  return { tracks, source: "youtube_page_urls" };
+/**
+ * Fetch the YouTube watch page and extract caption track metadata from the
+ * embedded player response. Returns null (not an error) if no caption data
+ * is present in the page — that can mean the video genuinely has none, OR
+ * that YouTube served a cookie-consent interstitial instead of the real
+ * page (common for datacenter IPs, like cloud hosts). The CONSENT cookie
+ * below answers that prompt so the real page comes back.
+ */
+async function fetchCaptionsFromWatchPage(videoId) {
+  const res = await fetch(`https://www.youtube.com/watch?v=${videoId}`, {
+    headers: {
+      "User-Agent": USER_AGENT,
+      "Accept-Language": "en-US,en;q=0.9,ar;q=0.8,zh;q=0.7,es;q=0.6,fr;q=0.5",
+      "Cookie": "CONSENT=YES+1",
+    },
+  });
+
+  const html = await res.text();
+
+  const captionIdx = html.indexOf('"captionTracks":');
+  if (captionIdx < 0) return null;
+
+  const openBracket = html.indexOf("[", captionIdx);
+  if (openBracket < 0) return null;
+
+  const balanced = extractBalancedJson(html, openBracket);
+  if (!balanced) return null;
+
+  let tracksJson;
+  try {
+    tracksJson = JSON.parse(balanced);
+  } catch {
+    return null;
+  }
+
+  if (!Array.isArray(tracksJson) || tracksJson.length === 0) return null;
+
+  return mapCaptionTracks(tracksJson);
+}
+
+/**
+ * Fetch caption track metadata (URLs only) for a video. Retries once on
+ * failure — YouTube occasionally serves a transient interstitial that
+ * clears up on a second request.
+ */
+export async function fetchAllTranscripts(videoId) {
+  const attempt1 = await fetchCaptionsFromWatchPage(videoId).catch(() => null);
+  if (attempt1) return { tracks: attempt1, source: "youtube_page_urls" };
+
+  const attempt2 = await fetchCaptionsFromWatchPage(videoId).catch(() => null);
+  if (attempt2) return { tracks: attempt2, source: "youtube_page_urls" };
+
+  throw new Error(
+    "Couldn't retrieve captions for this video. Either it has none, or YouTube is temporarily blocking this request — try again in a moment, or try a different video."
+  );
 }
 
 /**
